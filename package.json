@@ -9,7 +9,8 @@
     "dev:vite": "vite --host 127.0.0.1",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "setup": "node scripts/setup-scramjet.mjs"
+    "setup": "node scripts/setup-scramjet.mjs",
+    "start": "node server.mjs"
   },
   "dependencies": {
     "@mercuryworkshop/bare-as-module3": "^2.2.5",
