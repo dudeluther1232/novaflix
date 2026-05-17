@@ -118,9 +118,7 @@ function App() {
     }
   };
 
-  const displayedRows = query.trim()
-    ? [{ key: 'search', title: loadingSearch ? 'Searching...' : `Results for "${query.trim()}"`, items: searchResults }]
-    : rows.map((row) => ({ ...row, items: catalog[row.key] || [] }));
+  const isSearching = Boolean(query.trim());
 
   return (
     <main>
@@ -128,9 +126,18 @@ function App() {
       {error && <div className="toast">{error}</div>}
       <Hero item={hero} onPlay={openDetails} />
       <section className="catalog" aria-label="Novaflix catalog">
-        {displayedRows.map((row) => (
-          <Rail key={row.key} title={row.title} items={row.items} onSelect={openDetails} loading={!row.items?.length && !query.trim()} />
-        ))}
+        {isSearching ? (
+          <SearchGrid
+            title={loadingSearch ? 'Searching…' : `Results for “${query.trim()}”`}
+            items={searchResults}
+            onSelect={openDetails}
+            loading={loadingSearch && searchResults.length === 0}
+          />
+        ) : (
+          rows.map((row) => (
+            <Rail key={row.key} title={row.title} items={catalog[row.key] || []} onSelect={openDetails} loading={!catalog[row.key]?.length} />
+          ))
+        )}
       </section>
       {selected && <Details item={selected} onClose={() => setSelected(null)} onOpen={openDetails} />}
     </main>
@@ -192,6 +199,27 @@ function Rail({ title, items, onSelect, loading }) {
               <img src={image(item.poster_path || item.backdrop_path, 'w342')} alt="" loading="lazy" />
             ) : (
               <div className="missingArt">{titleOf(item).slice(0, 1)}</div>
+            )}
+            <span>{titleOf(item)}</span>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function SearchGrid({ title, items, onSelect, loading }) {
+  return (
+    <section className="searchSection">
+      <h2 className="searchTitle">{title}</h2>
+      <div className="searchGrid">
+        {loading && Array.from({ length: 12 }, (_, i) => <div className="searchCard ghost" key={i} />)}
+        {items.map((item) => (
+          <button className="searchCard" key={`${mediaTypeOf(item)}-${item.id}`} onClick={() => onSelect(item)}>
+            {image(item.backdrop_path || item.poster_path, 'w500') ? (
+              <img src={image(item.backdrop_path || item.poster_path, 'w500')} alt="" loading="lazy" />
+            ) : (
+              <div className="missingArt wide">{titleOf(item).slice(0, 1)}</div>
             )}
             <span>{titleOf(item)}</span>
           </button>
