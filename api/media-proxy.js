@@ -19,6 +19,11 @@ function send(res, status, body, type) {
 export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return send(res, 204, '');
 
+  // Allow POST (tracking/analytics calls from the videasy player)
+  if (!['GET', 'HEAD', 'POST', 'OPTIONS'].includes(req.method)) {
+    return send(res, 405, { error: 'Method not allowed' });
+  }
+
   try {
     const base = `http://${req.headers.host || 'localhost'}`;
     const requestUrl = new URL(req.url, base);
@@ -31,6 +36,12 @@ export default async function handler(req, res) {
 
     if (!['https:', 'http:'].includes(target.protocol)) {
       return send(res, 403, { error: 'Only HTTP(S) allowed' });
+    }
+
+    // Strip ?f= / ?ref= / ?referer= params that CDNs use to hotlink-check.
+    // When our Railway URL leaks into these, the upstream CDN 403s us.
+    for (const bad of ['f', 'ref', 'referer', 'referrer', 'origin']) {
+      target.searchParams.delete(bad);
     }
 
     // Pick sensible spoof headers — match whatever origin the target expects
@@ -52,7 +63,22 @@ export default async function handler(req, res) {
       upstreamHeaders['Range'] = req.headers['range'];
     }
 
-    const upstream = await fetch(target.href, { headers: upstreamHeaders });
+    const fetchOptions = {
+      method: req.method,
+      headers: upstreamHeaders,
+    };
+
+    // Forward POST body if present
+    if (req.method === 'POST') {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      fetchOptions.body = Buffer.concat(chunks);
+      if (req.headers['content-type']) {
+        upstreamHeaders['Content-Type'] = req.headers['content-type'];
+      }
+    }
+
+    const upstream = await fetch(target.href, fetchOptions);
 
     const contentType = upstream.headers.get('content-type') || 'application/octet-stream';
     const isM3u8 = contentType.includes('mpegurl') ||
