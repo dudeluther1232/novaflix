@@ -38,25 +38,24 @@ export default async function handler(req, res) {
       return send(res, 403, { error: 'Only HTTP(S) allowed' });
     }
 
-    // Strip ?f= / ?ref= / ?referer= params that CDNs use to hotlink-check.
-    // When our Railway URL leaks into these, the upstream CDN 403s us.
-    for (const bad of ['f', 'ref', 'referer', 'referrer', 'origin']) {
-      target.searchParams.delete(bad);
+    // Replace hotlink-check params with the Videasy player origin.
+    // CDNs like speedsterwave.app embed ?f=<referrer> in stream URLs and REQUIRE
+    // it to be present and set to an allowed domain — deleting it causes 403.
+    // Replace instead of delete so the CDN sees player.videasy.net as the source.
+    const VIDEASY_ORIGIN_PARAM = 'https://player.videasy.net';
+    for (const param of ['f', 'ref', 'referer', 'referrer', 'origin']) {
+      if (target.searchParams.has(param)) {
+        target.searchParams.set(param, VIDEASY_ORIGIN_PARAM);
+      }
     }
 
-    // Pick sensible spoof headers — match whatever origin the target expects
-    const targetHost = target.hostname;
-    const spoofReferer = targetHost.endsWith('videasy.net')
-      ? 'https://player.videasy.net/'
-      : `https://${targetHost}/`;
-    const spoofOrigin = targetHost.endsWith('videasy.net')
-      ? 'https://player.videasy.net'
-      : `https://${targetHost}`;
-
+    // Always spoof as if the request comes from the Videasy player.
+    // CDN hosts like easy.speedsterwave.app check Referer/Origin to validate
+    // they're serving the Videasy player — not our Railway domain.
     const upstreamHeaders = {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-      Referer: spoofReferer,
-      Origin: spoofOrigin,
+      Referer: 'https://player.videasy.net/',
+      Origin: 'https://player.videasy.net',
       Accept: req.headers['accept'] || '*/*',
     };
     if (req.headers['range']) {

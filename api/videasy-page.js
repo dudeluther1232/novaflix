@@ -98,6 +98,16 @@ const INTERCEPTOR = `
     if (!url) return url;
     var s = String(url);
     if (s.startsWith('data:') || s.startsWith('blob:') || s.startsWith('/')) return s;
+    // Rewrite hotlink-check params so CDNs see player.videasy.net, not our domain.
+    // Do this for same-origin paths too since they still end up in the proxy URL.
+    try {
+      var u = new URL(s, location.href);
+      var dirty = false;
+      ['f', 'ref', 'referer', 'referrer', 'origin'].forEach(function (p) {
+        if (u.searchParams.has(p)) { u.searchParams.set(p, 'https://player.videasy.net'); dirty = true; }
+      });
+      if (dirty) s = u.href;
+    } catch (_) {}
     if (!isCrossOrigin(s)) return s;
     return _proxy(s);
   }
