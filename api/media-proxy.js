@@ -33,10 +33,19 @@ export default async function handler(req, res) {
       return send(res, 403, { error: 'Only HTTP(S) allowed' });
     }
 
+    // Pick sensible spoof headers — match whatever origin the target expects
+    const targetHost = target.hostname;
+    const spoofReferer = targetHost.endsWith('videasy.net')
+      ? 'https://player.videasy.net/'
+      : `https://${targetHost}/`;
+    const spoofOrigin = targetHost.endsWith('videasy.net')
+      ? 'https://player.videasy.net'
+      : `https://${targetHost}`;
+
     const upstreamHeaders = {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-      Referer: 'https://player.videasy.net/',
-      Origin: 'https://player.videasy.net',
+      Referer: spoofReferer,
+      Origin: spoofOrigin,
       Accept: req.headers['accept'] || '*/*',
     };
     if (req.headers['range']) {
