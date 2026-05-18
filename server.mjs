@@ -80,7 +80,37 @@ const server = createServer(async (req, res) => {
   try {
     const s = await stat(filePath);
     if (s.isDirectory()) filePath = join(filePath, 'index.html');
-  } catch { filePath = join(DIST, 'index.html'); }
+  } catch {
+    // If a JS/JSON/CSS/WASM asset is missing from dist, it belongs to the
+    // Videasy player — proxy it from player.videasy.net instead of
+    // returning index.html (which causes "Unexpected token '<'" errors).
+    const ext = extname(url.pathname).toLowerCase();
+    if (['.js', '.json', '.css', '.wasm', '.map'].includes(ext)) {
+      try {
+        const upstream = await fetch(
+          `https://player.videasy.net${url.pathname}${url.search}`,
+          {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+              Referer: 'https://player.videasy.net/',
+              Origin: 'https://player.videasy.net',
+            },
+          }
+        );
+        const ct = upstream.headers.get('content-type') || MIME[ext] || 'application/octet-stream';
+        res.statusCode = upstream.status;
+        res.setHeader('Content-Type', ct);
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        const buf = await upstream.arrayBuffer();
+        res.end(Buffer.from(buf));
+      } catch (err) {
+        res.statusCode = 502;
+        res.end('Asset proxy error: ' + err.message);
+      }
+      return;
+    }
+    filePath = join(DIST, 'index.html');
+  }
 
   try {
     const data = await readFile(filePath);
