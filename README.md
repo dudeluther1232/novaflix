@@ -12,4 +12,4 @@ no subtitles
 
 downloading doesn't have functionality **yet**.
 
-Im fixing all of this RIGHT NOW -5/27/26
+Im fixing all of this RIGHT NOW so wait frl.  -5/27/26
