@@ -90,6 +90,43 @@ const INTERCEPTOR = `
     return s.indexOf('.m3u8') !== -1 || (ct && (ct.indexOf('mpegurl') !== -1 || ct.indexOf('x-mpegURL') !== -1));
   }
 
+  function isSubtitle(url) {
+    var s = String(url || '');
+    if (s.indexOf('.vtt') === -1 && s.indexOf('.srt') === -1) return false;
+    if (s.indexOf('beacon') !== -1 || s.indexOf('analytics') !== -1 || s.indexOf('ping') !== -1) return false;
+    return true;
+  }
+
+  var LANG_CODES = { en:'English', fr:'French', es:'Spanish', de:'German', it:'Italian', pt:'Portuguese',
+    ja:'Japanese', ko:'Korean', zh:'Chinese', ar:'Arabic', ru:'Russian', nl:'Dutch', pl:'Polish',
+    sv:'Swedish', da:'Danish', fi:'Finnish', no:'Norwegian', cs:'Czech', hu:'Hungarian', tr:'Turkish',
+    vi:'Vietnamese', th:'Thai', id:'Indonesian', hi:'Hindi', uk:'Ukrainian', ro:'Romanian',
+    he:'Hebrew', el:'Greek', bg:'Bulgarian', sr:'Serbian', hr:'Croatian' };
+
+  // '-' is at the END of the character class to avoid being treated as a range
+  var LANG_RE = /[_./?&](en|fr|es|de|it|pt|ja|ko|zh|ar|ru|nl|pl|sv|da|fi|no|cs|hu|tr|vi|th|id|hi|uk|ro|he|el|bg|sr|hr|sk|sl|lt|lv|et)[_./?&-]/i;
+
+  function subtitleLang(url) {
+    var m = String(url).match(LANG_RE);
+    return m ? m[1].toLowerCase() : 'und';
+  }
+
+  function subtitleLabel(url) {
+    var s = String(url);
+    var m = s.match(LANG_RE);
+    if (m) {
+      var code = m[1].toLowerCase();
+      return LANG_CODES[code] || code.toUpperCase();
+    }
+    var parts = s.split('?')[0].split('/');
+    var fname = parts[parts.length - 1].replace('.vtt','').replace('.srt','');
+    return fname.length > 0 && fname.length < 40 ? fname : 'Subtitles';
+  }
+
+  function notifySubtitle(url) {
+    try { window.parent.postMessage({ type: 'NOVAFLIX_SUBTITLE', url: url, lang: subtitleLang(url), label: subtitleLabel(url) }, '*'); } catch (_) {}
+  }
+
   function isCrossOrigin(url) {
     try { return new URL(url).origin !== location.origin; } catch { return false; }
   }
@@ -117,11 +154,13 @@ const INTERCEPTOR = `
   window.fetch = function (input, init) {
     var rawUrl = typeof input === 'string' ? input : (input && input.url) ? input.url : String(input);
     if (isM3u8(rawUrl)) notify(rawUrl);
+    if (isSubtitle(rawUrl)) notifySubtitle(rawUrl);
     var proxied = maybeProxy(rawUrl);
     return _fetch(proxied === rawUrl ? input : proxied, init).then(function (resp) {
       if (!_notified) {
         var ct = resp.headers.get('content-type') || '';
         if (isM3u8(rawUrl, ct)) notify(rawUrl);
+        if (isSubtitle(rawUrl)) notifySubtitle(rawUrl);
       }
       return resp;
     });
@@ -132,6 +171,7 @@ const INTERCEPTOR = `
   XMLHttpRequest.prototype.open = function (method, url) {
     var rawUrl = String(url);
     if (isM3u8(rawUrl)) notify(rawUrl);
+    if (isSubtitle(rawUrl)) notifySubtitle(rawUrl);
     arguments[1] = maybeProxy(rawUrl);
     return _open.apply(this, arguments);
   };

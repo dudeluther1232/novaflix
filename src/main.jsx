@@ -293,6 +293,7 @@ function VideasyPlayer({ item }) {
   const [season, setSeason]   = useState(1);
   const [episode, setEpisode] = useState(1);
   const [hlsUrl, setHlsUrl]   = useState(null);
+  const [subtitles, setSubtitles] = useState([]); // [{url, lang, label}]
   // 'idle' | 'api' | 'sniffing' | 'ready' | 'error'
   const [phase, setPhase]     = useState('idle');
   const [errorMsg, setErrorMsg] = useState('');
@@ -335,11 +336,18 @@ function VideasyPlayer({ item }) {
     extractorFrameRef.current = iframe;
 
     const onMessage = (event) => {
-      const { type, url, error } = event.data || {};
+      const { type, url, error, lang, label } = event.data || {};
       if (type === 'NOVAFLIX_M3U8') {
         teardown();
         setHlsUrl('/api/media-proxy?url=' + encodeURIComponent(url));
         setPhase('ready');
+      } else if (type === 'NOVAFLIX_SUBTITLE') {
+        // Collect subtitle tracks as they are discovered (don't stop sniffer)
+        const proxiedUrl = '/api/media-proxy?url=' + encodeURIComponent(url);
+        setSubtitles(prev => {
+          if (prev.some(s => s.url === proxiedUrl)) return prev;
+          return [...prev, { url: proxiedUrl, lang: lang || 'en', label: label || `Track ${prev.length + 1}` }];
+        });
       } else if (
         type === 'NOVAFLIX_TIMEOUT' ||
         type === 'NOVAFLIX_SW_ERROR' ||
@@ -365,6 +373,7 @@ function VideasyPlayer({ item }) {
   const load = useCallback(() => {
     teardown();
     setHlsUrl(null);
+    setSubtitles([]);
     setErrorMsg('');
     setPhase('api');
 
@@ -416,7 +425,7 @@ function VideasyPlayer({ item }) {
       )}
 
       {phase === 'ready' && hlsUrl ? (
-        <NovaPlayer hlsUrl={hlsUrl} title={title} poster={poster} />
+        <NovaPlayer hlsUrl={hlsUrl} title={title} poster={poster} subtitles={subtitles} />
       ) : phase === 'error' ? (
         <div className="videasyLoading" style={{ flexDirection: 'column', gap: 8 }}>
           <span style={{ color: '#e50914', fontSize: 14 }}>⚠ {errorMsg}</span>
@@ -444,7 +453,7 @@ function VideasyPlayer({ item }) {
 
 // ---------------------------------------------------------------------------
 
-function NovaPlayer({ hlsUrl, title, poster }) {
+function NovaPlayer({ hlsUrl, title, poster, subtitles = [] }) {
   const videoRef = useRef(null);
   const hlsRef = useRef(null);
   const hideTimerRef = useRef(null);
@@ -461,6 +470,11 @@ function NovaPlayer({ hlsUrl, title, poster }) {
   const [fullscreen, setFullscreen] = useState(false);
   const [levels, setLevels] = useState([]);
   const [currentLevel, setCurrentLevel] = useState(-1);
+  const [captionsOpen, setCaptionsOpen] = useState(false);
+  const [activeCaption, setActiveCaption] = useState(null); // url string or null
+  const [downloading, setDownloading] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState(null); // null | 'xbox' | 'fetching' | 'done'
+  const activeTrackRef = useRef(null);
 
   const showControls = () => {
     setControlsVisible(true);
@@ -480,17 +494,72 @@ function NovaPlayer({ hlsUrl, title, poster }) {
       const hls = new Hls({
         enableWorker: true,
         startLevel: -1,
-        capLevelToPlayerSize: false
+        capLevelToPlayerSize: false,
+        debug: false,
       });
       hlsRef.current = hls;
       hls.loadSource(hlsUrl);
       hls.attachMedia(video);
+
       hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
-        setLevels(data.levels || []);
-        setCurrentLevel(hls.currentLevel);
+        const lvls = data.levels || [];
+        console.log('[NovaPlayer] MANIFEST_PARSED levels:', lvls.length, lvls.map(l => ({ h: l.height, bw: l.bitrate })));
+        setCurrentLevel(-1);
+
+        // Always try to fetch the raw master m3u8 to get RESOLUTION= tags,
+        // because HLS.js sometimes reports height=0 when it parses proxy URLs.
+        const rawM3u8 = new URL(hlsUrl, location.href).searchParams.get('url');
+        if (rawM3u8) {
+          fetch('/api/media-proxy?url=' + encodeURIComponent(rawM3u8))
+            .then(r => r.text())
+            .then(text => {
+              console.log('[NovaPlayer] master m3u8 snippet:', text.slice(0, 400));
+              const parsed = [];
+              const lines = text.split('\n');
+              for (let i = 0; i < lines.length; i++) {
+                if (lines[i].startsWith('#EXT-X-STREAM-INF')) {
+                  const resParsed = lines[i].match(/RESOLUTION=(\d+)x(\d+)/);
+                  const bw  = lines[i].match(/BANDWIDTH=(\d+)/);
+                  const uri = lines[i+1]?.trim();
+                  if (uri && !uri.startsWith('#')) {
+                    parsed.push({
+                      height: resParsed ? parseInt(resParsed[2]) : 0,
+                      width:  resParsed ? parseInt(resParsed[1]) : 0,
+                      bitrate: bw  ? parseInt(bw[1])  : 0,
+                    });
+                  }
+                }
+              }
+              console.log('[NovaPlayer] parsed levels from m3u8:', parsed);
+              if (parsed.length > 0) {
+                // Build merged level list using parsed metadata + HLS.js levels by index
+                const merged = parsed.map((p, i) => ({
+                  ...(lvls[i] || {}),
+                  height: p.height || (lvls[i]?.height) || 0,
+                  bitrate: p.bitrate || (lvls[i]?.bitrate) || 0,
+                }));
+                setLevels(merged);
+              } else if (lvls.length > 0) {
+                // Single-rendition stream — show it as-is
+                setLevels(lvls);
+              }
+            })
+            .catch(() => {
+              // If fetch fails, still show whatever HLS.js gave us
+              setLevels(lvls);
+            });
+        } else {
+          setLevels(lvls);
+        }
       });
+
       hls.on(Hls.Events.LEVEL_SWITCHED, (_, data) => {
+        console.log('[NovaPlayer] LEVEL_SWITCHED to', data.level);
         setCurrentLevel(data.level);
+      });
+      hls.on(Hls.Events.LEVEL_LOADED, () => {
+        // levels may grow after initial parse
+        if (hls.levels?.length) setLevels(prev => prev.length === hls.levels.length ? prev : hls.levels);
       });
       return () => {
         hls.destroy();
@@ -564,6 +633,86 @@ function NovaPlayer({ hlsUrl, title, poster }) {
     setQualityOpen(false);
   };
 
+  // ── Caption toggle ────────────────────────────────────────────────────
+  const toggleCaption = (url) => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (activeCaption === url) {
+      // Turn off
+      setActiveCaption(null);
+      Array.from(video.textTracks).forEach(t => { t.mode = 'disabled'; });
+    } else {
+      setActiveCaption(url);
+    }
+    setCaptionsOpen(false);
+  };
+
+  // Sync the active <track> element when activeCaption changes
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    // Disable all tracks first
+    Array.from(video.textTracks).forEach(t => { t.mode = 'disabled'; });
+    if (!activeCaption) return;
+    // Re-enable after a tick to let the browser settle
+    const timer = setTimeout(() => {
+      const tracks = Array.from(video.textTracks);
+      // Match by index: activeCaption is a URL, find which subtitle index it matches
+      const idx = subtitles.findIndex(s => s.url === activeCaption);
+      const target = idx >= 0 ? tracks[idx] : tracks[0];
+      if (target) target.mode = 'showing';
+    }, 50);
+    return () => clearTimeout(timer);
+  }, [activeCaption, subtitles]);
+
+  // ── Download ──────────────────────────────────────────────────────────
+  const isXbox = /Xbox/i.test(navigator.userAgent);
+
+  const handleDownload = async () => {
+    if (!hlsUrl || downloading) return;
+    const encodedM3u8 = hlsUrl; // already a /api/media-proxy?url=... path
+    const safeTitle = title.replace(/[^\w\s-]/g, '') || 'video';
+    const downloadUrl = `/api/download?url=${encodeURIComponent(encodedM3u8)}&title=${encodeURIComponent(safeTitle)}`;
+
+    if (isXbox) {
+      // Xbox browser: fetch blob then use URL.createObjectURL with a forced navigate
+      setDownloading(true);
+      setDownloadProgress('xbox');
+      try {
+        // Use TS fallback for Xbox since it doesn't need ffmpeg and is faster to start
+        const tsUrl = downloadUrl + '&mode=ts';
+        const resp = await fetch(tsUrl);
+        if (!resp.ok) throw new Error('Download failed: ' + resp.status);
+        const blob = await resp.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        // On Xbox Edge, window.open with a blob URL triggers a save dialog
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = safeTitle + '.ts';
+        a.target = '_blank';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => { URL.revokeObjectURL(blobUrl); a.remove(); }, 5000);
+        setDownloadProgress('done');
+      } catch (err) {
+        alert('Xbox download failed: ' + err.message + '\n\nTry opening this URL directly:\n' + location.origin + downloadUrl + '&mode=ts');
+      } finally {
+        setDownloading(false);
+        setTimeout(() => setDownloadProgress(null), 3000);
+      }
+      return;
+    }
+
+    // Normal browsers: just open the download URL
+    const a = document.createElement('a');
+    a.href = downloadUrl;
+    a.download = safeTitle + '.mp4';
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
+
   return (
     <div
       className="novaPlayer novaPlayerShell"
@@ -591,7 +740,18 @@ function NovaPlayer({ hlsUrl, title, poster }) {
           setVolume(event.currentTarget.muted ? 0 : event.currentTarget.volume);
         }}
         onClick={toggle}
-      />
+      >
+        {subtitles.map((sub, i) => (
+          <track
+            key={sub.url}
+            kind="subtitles"
+            src={sub.url}
+            srcLang={sub.lang}
+            label={sub.label}
+            default={i === 0 && activeCaption === sub.url}
+          />
+        ))}
+      </video>
       <div className={`novaOverlay ${controlsVisible || !playing ? 'show' : ''}`}>
         <div className="centerControls">
           <button className="centerButton" onClick={() => video && (video.currentTime = Math.max(0, video.currentTime - 10))} aria-label="Back 10 seconds">
@@ -661,15 +821,71 @@ function NovaPlayer({ hlsUrl, title, poster }) {
             </div>
 
             <div className="controlRight">
-              <button className="cbtn cbtnIcon" type="button" aria-label="Download">
-                <Download size={17} />
+              <button
+                className={`cbtn cbtnIcon${downloading ? ' cbtnActive' : ''}`}
+                type="button"
+                aria-label={downloading ? 'Downloading…' : 'Download'}
+                onClick={handleDownload}
+                disabled={downloading}
+                title={isXbox ? 'Download (Xbox mode)' : 'Download as MP4'}
+              >
+                {downloading ? <Loader2 size={17} className="spin" /> : <Download size={17} />}
               </button>
-              <button className="cbtn cbtnIcon" type="button" aria-label="Captions">
-                <Captions size={18} />
-              </button>
+              {/* Captions button + panel */}
+              <div className="qualityWrap">
+                <button
+                  className={`cbtn cbtnIcon${activeCaption ? ' cbtnActive' : ''}`}
+                  type="button"
+                  aria-label="Captions"
+                  onClick={() => setCaptionsOpen(o => !o)}
+                  title="Subtitles / Captions"
+                >
+                  <Captions size={18} />
+                </button>
+                {captionsOpen && (
+                  <div className="qualityPanel">
+                    <div className="qualityHead">
+                      <span>Captions</span>
+                      <button className="qualityClose" type="button" onClick={() => setCaptionsOpen(false)} aria-label="Close">
+                        <X size={12} />
+                      </button>
+                    </div>
+                    <div className="qualityList">
+                      <button
+                        className={`qualityItem ${!activeCaption ? 'active' : ''}`}
+                        type="button"
+                        onClick={() => { setActiveCaption(null); setCaptionsOpen(false); const v = videoRef.current; if (v) Array.from(v.textTracks).forEach(t => { t.mode = 'disabled'; }); }}
+                      >
+                        <span>Off</span>
+                      </button>
+                      {subtitles.length === 0 && (
+                        <div className="qualityItem" style={{ color: 'var(--text-dim)', fontSize: '0.78rem', pointerEvents: 'none' }}>
+                          <span>No tracks found yet</span>
+                        </div>
+                      )}
+                      {subtitles.map(sub => (
+                        <button
+                          key={sub.url}
+                          className={`qualityItem ${activeCaption === sub.url ? 'active' : ''}`}
+                          type="button"
+                          onClick={() => toggleCaption(sub.url)}
+                        >
+                          <span>{sub.label}</span>
+                          <span className="qualityBadge">{sub.lang}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
               <div className="qualityWrap">
                 <button className="cbtn cbtnIcon" type="button" aria-label="Quality" onClick={() => setQualityOpen((open) => !open)}>
                   <Gauge size={18} />
+                  <span style={{ fontSize: '0.65rem', fontFamily: 'DM Mono, monospace', marginLeft: 2, color: 'rgba(255,255,255,0.6)' }}>
+                    {currentLevel === -1
+                      ? (levels[hlsRef.current?.currentLevel]?.height ? `${levels[hlsRef.current.currentLevel].height}p` : 'Auto')
+                      : (levels[currentLevel]?.height ? `${levels[currentLevel].height}p` : `L${currentLevel+1}`)}
+                  </span>
                 </button>
                 {qualityOpen && (
                   <div className="qualityPanel">
@@ -684,11 +900,16 @@ function NovaPlayer({ hlsUrl, title, poster }) {
                         <span>Auto</span>
                       </button>
                       {levels.map((level, index) => (
-                        <button className={`qualityItem ${currentLevel === index ? 'active' : ''}`} type="button" key={`${level.height || 'level'}-${index}`} onClick={() => setQuality(index)}>
+                        <button className={`qualityItem ${currentLevel === index ? 'active' : ''}`} type="button" key={`level-${index}`} onClick={() => setQuality(index)}>
                           <span>{level.height ? `${level.height}p` : `Level ${index + 1}`}</span>
-                          {level.bitrate ? <span className="qualityBadge">{Math.round(level.bitrate / 1000)}k</span> : null}
+                          {level.bitrate ? <span className="qualityBadge">{level.bitrate > 1000000 ? `${(level.bitrate/1000000).toFixed(1)}M` : `${Math.round(level.bitrate/1000)}k`}</span> : null}
                         </button>
                       ))}
+                      {levels.length === 0 && (
+                        <div className="qualityItem" style={{ color: 'var(--text-dim)', fontSize: '0.78rem', pointerEvents: 'none' }}>
+                          <span>Loading…</span>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}

@@ -794,6 +794,21 @@ nav a:hover {
 .cbtn:active { transform: scale(0.88); }
 .cbtnIcon { padding: 6px 8px; }
 
+.cbtnActive {
+  color: var(--pa) !important;
+}
+
+/* Quality available indicator dot */
+.qualityDot {
+  background: var(--pa);
+  border-radius: 50%;
+  display: inline-block;
+  height: 5px;
+  margin-left: 2px;
+  vertical-align: super;
+  width: 5px;
+}
+
 /* ── Volume ─────────────────────────────────────────────────── */
 .volumeWrap {
   align-items: center;

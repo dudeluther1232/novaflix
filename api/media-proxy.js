@@ -84,6 +84,21 @@ export default async function handler(req, res) {
                    contentType.includes('x-mpegURL') ||
                    target.pathname.endsWith('.m3u8');
 
+    const isVtt = contentType.includes('vtt') ||
+                  contentType.includes('text/plain') ||
+                  target.pathname.endsWith('.vtt') ||
+                  target.pathname.endsWith('.srt');
+
+    if (isVtt) {
+      // Browsers completely ignore X-TIMESTAMP-MAP when a VTT is loaded via <track src=...>.
+      // Videasy subtitle VTTs already have cue times in presentation time
+      // (00:01:23.000 = 1 minute 23 seconds into the film), so we just strip
+      // the header and serve the cues unchanged.
+      let text = await upstream.text();
+      text = text.replace(/X-TIMESTAMP-MAP=[^\n]+\n?/g, '');
+      return send(res, upstream.status, text, 'text/vtt; charset=utf-8');
+    }
+
     if (isM3u8) {
       // Rewrite every URL inside the playlist so HLS.js fetches
       // segments through this same proxy (avoids CORS on segment requests).

@@ -7,6 +7,7 @@ import tmdb from './api/tmdb.js';
 import mediaProxy from './api/media-proxy.js';
 import videasy from './api/videasy.js';
 import videasyPage from './api/videasy-page.js';
+import download from './api/download.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const DIST = join(__dirname, 'dist');
@@ -32,6 +33,7 @@ const apiRoutes = new Map([
   ['/api/media-proxy', mediaProxy],
   ['/api/videasy', videasy],
   ['/api/videasy-page', videasyPage],
+  ['/api/download', download],
 ]);
 
 const server = createServer(async (req, res) => {
