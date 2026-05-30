@@ -1,5 +1,5 @@
 # novaflix
-My new Videasy frontend. Uses many tools to extract streams from videasy and play them! Have fun, hi peakyrexed u can steal this if u want, just credit me, also dm me.
+My new Videasy frontend. Uses many tools to extract streams from videasy and play them! Have fun
 
 
 # Known Issues:
@@ -12,4 +12,4 @@ no subtitles
 
 downloading doesn't have functionality **yet**.
 
-// this is here to force a push for a upd i frogot to do.
+Im fixing all of this RIGHT NOW so wait frl.  -5/27/26
